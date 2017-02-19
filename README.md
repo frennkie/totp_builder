@@ -21,6 +21,20 @@ pip install pyotp
 
 ### Usage / Config
 
+Currently no command line options or help are available. Just run the python script:
+
+```
+$: ./totp_builder.py
+Validate User Data...
+
+Processing Users...
+
+* JohnDoe (jdoe@example.com): 5PVCLVLMR2SSLIHG
+
+Done!
+```
+
+
 Users are currently hardcoded
 
 ```
