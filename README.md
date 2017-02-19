@@ -15,7 +15,8 @@ via S/MIME encrypted e-mail.
 #### Install on Ubuntu
 
 ```
-apt-get install python2 python-pip python-m2crypto qrcode
+sudo apt-get update
+sudo apt-get install -y python2.7 python-pip python-m2crypto python-qrcode
 pip install pyotp
 ```
 
