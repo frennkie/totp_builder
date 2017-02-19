@@ -64,6 +64,13 @@ SMTP_SERVER="127.0.0.1"
 SMTP_FROM="otp-admin@example.com"
 
 
+def insert_newlines(string, every=64):
+    lines = []
+    for i in xrange(0, len(string), every):
+        lines.append(string[i:i+every])
+    return '\n'.join(lines)
+
+
 def ldap_search(ldap_uri, base, query):
     '''
     Perform an LDAP query.
@@ -124,8 +131,8 @@ def ldap_search(ldap_uri, base, query):
 
                     userCertificate_raw = binascii.b2a_base64(userCertificate)
                     userCertificate = "-----BEGIN CERTIFICATE-----\n"
-                    userCertificate += userCertificate_raw
-                    userCertificate += "-----END CERTIFICATE-----\n"
+                    userCertificate += insert_newlines(userCertificate_raw).rstrip("\n")
+                    userCertificate += "\n-----END CERTIFICATE-----\n"
 
                     results.append({"dn": dn,
                                     "mail": mail,
@@ -263,12 +270,12 @@ def create_and_send_qrcode(user,
     try:
         os.system("shred -uf {0}".format(QRCODE_FILE))
     except Exception as err:
-        print("Error: {0}".format(err)
+        print("Error: {0}".format(err))
 
     try:
         os.system("srm -f {0}".format(QRCODE_FILE))
     except Exception as err:
-        print("Error: {0}".format(err)
+        print("Error: {0}".format(err))
 
     return shared_secret, qrcode_text
 
