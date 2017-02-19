@@ -27,9 +27,14 @@
 
 import os
 import os.path
+import sys
+import ldap
 import base64
+import logging
 import smtplib
 import datetime
+import argparse
+import binascii
 
 from M2Crypto import BIO, Rand, SMIME, X509
 from M2Crypto.X509 import X509Error
@@ -42,15 +47,105 @@ from email import Encoders
 import qrcode
 import pyotp
 
+
+# Versioning
+__version_info__ = ('0', '1', '0')
+__version__ = '.'.join(__version_info__)
+
+
+LDAP_URI = 'ldap://ldap.example.com'
+SEARCH_BASE = 'o=example,c=com'
+
 QRCODE_FILE="qrcode.png"
 
 OTP_SYSTEM="OTP_AUTH"
 
 SMTP_SERVER="127.0.0.1"
-SMTP_FROM="admin@example.com"
+SMTP_FROM="otp-admin@example.com"
 
 
-def send_mail_ssl(server, sender, to, to_cert, subject, text, files=[], attachments={}):
+def ldap_search(ldap_uri, base, query):
+    '''
+    Perform an LDAP query.
+    '''
+    results = []
+
+    try:
+        l = ldap.initialize(ldap_uri)
+        l.protocol_version = ldap.VERSION3
+
+        search_scope = ldap.SCOPE_SUBTREE
+        retrieve_attributes = None
+
+        ldap_result_id = l.search(
+            base,
+            search_scope,
+            query,
+            retrieve_attributes
+        )
+        result_set = []
+        while 1:
+            result_type, result_data = l.result(ldap_result_id, 0)
+            if (result_data == []):
+                break
+            else:
+                if result_type == ldap.RES_SEARCH_ENTRY:
+                    result_set.append(result_data)
+
+        if len(result_set) == 0:
+            print('No results found.')
+            return
+
+        count = 0
+        for i in range(len(result_set)):
+            for entry in result_set[i]:
+                try:
+                    dn = entry[1]
+                    mail = entry[1]['mail'][0]
+                    uid = entry[1]['uid'][0]
+                    cn = entry[1]['cn'][0]
+
+                    # check both userCertificate and userCertificate;binary
+                    userCertificateBinary = False
+                    if entry[1].get('userCertificate', None):
+                        userCertificate = entry[1]['userCertificate'][0]
+                    elif entry[1].get('userCertificate;binary', None):
+                        userCertificate = entry[1]['userCertificate;binary'][0]
+                        userCertificateBinary = True
+                    else:
+                        print("Warning: No certificate found!")
+
+                    count += 1
+
+                    if userCertificateBinary:
+                        pass  # TODO
+                    if not userCertificateBinary:
+                        pass  # TODO
+
+                    userCertificate_raw = binascii.b2a_base64(userCertificate)
+                    userCertificate = "-----BEGIN CERTIFICATE-----\n"
+                    userCertificate += userCertificate_raw
+                    userCertificate += "-----END CERTIFICATE-----\n"
+
+                    results.append({"dn": dn,
+                                    "mail": mail,
+                                    "userCertificate": userCertificate,
+                                    "uid": uid,
+                                    "cn": cn})
+                except Exception as err:
+                    print("Error: {0}".format(err))
+                    raise Exception("Error: {0}".format(err))
+
+    except ldap.LDAPError as e:
+        print('LDAPError: %s.' % e)
+
+    finally:
+        l.unbind_s()
+
+    return results
+
+
+def send_mail_ssl(server, sender, to, to_cert, subject, text, files=[], attachments={}, send=False):
     """
     Sends SSL signed mail
 
@@ -62,6 +157,7 @@ def send_mail_ssl(server, sender, to, to_cert, subject, text, files=[], attachme
     files - list of strings with paths to file to be attached
     attachmets - dict where keys are file names and values are content of files
     to be attached
+    send - bool whether message should really be sent
     """
 
     # create multipart message
@@ -99,7 +195,7 @@ def send_mail_ssl(server, sender, to, to_cert, subject, text, files=[], attachme
     s = SMIME.SMIME()
 
     # Load target cert to encrypt to.
-    x509 = X509.load_cert(to_cert)
+    x509 = X509.load_cert_string(to_cert)
     sk = X509.X509_Stack()
     sk.push(x509)
     s.set_x509_stack(sk)
@@ -122,10 +218,14 @@ def send_mail_ssl(server, sender, to, to_cert, subject, text, files=[], attachme
     # Save the PRNG's state.
     Rand.save_file('randpool.dat')
 
-    # finaly send mail
-    smtp = smtplib.SMTP(server)
-    smtp.sendmail(sender, to, out.read() )
-    smtp.close()
+    # finally send mail
+    if send:
+        #        print("would have sent")
+        smtp = smtplib.SMTP(server)
+        smtp.sendmail(sender, to, out.read() )
+        smtp.close()
+    else:
+        print("sending is disabled (use --send)")
 
 
 def create_and_send_qrcode(user,
@@ -133,7 +233,8 @@ def create_and_send_qrcode(user,
                            user_cert=None,
                            system=OTP_SYSTEM,
                            server=SMTP_SERVER,
-                           sender=SMTP_FROM):
+                           sender=SMTP_FROM,
+                           send=False):
 
     # generate time based OTP secret
     shared_secret = pyotp.random_base32()
@@ -154,49 +255,106 @@ def create_and_send_qrcode(user,
                         text=("Dear UserID {0},\n\nplease find attached the "
                               "QR Code to provision the Google Authenticator "
                               "App for: {1}".format(user, system)),
-                        files=[QRCODE_FILE])
+                        files=[QRCODE_FILE],
+                        send=send)
 
     # securely delete .png file from disk
     os.system("shred -uf {0}".format(QRCODE_FILE))
 
     return shared_secret, qrcode_text
 
+
 def main():
 
-    users = [
-        ("JohnDoe", "jdoe@example.com", "jdoe_example.com_smime_public.pem"),
-    ]
+    # set up command line argument parsing
+    parser = argparse.ArgumentParser(description="Generate TOTP Tokens and "
+                                                 "send to User via S/MIME "
+                                                 "encrypted eMail")
+    parser.add_argument("-V", "--version",
+                        help="print version", action="version",
+                        version=__version__)
 
-    print("Validate User Data...\n")
-    issues = []
-    for user in users:
-        try:
-            x509 = X509.load_cert(user[2])
+    parser.add_argument("-v", "--verbose",
+                        help="console output verbosity",
+                        action="count")
 
-        except IOError as err:
-            issues.append("Error: Certificate not found: {0}\n"
-                          "Msg: {1}".format(user[2], err))
-        except X509Error as err:
-            issues.append("Error: Certificate problem: {0}\n"
-                          "Check format (should be PEM)\n"
-                          "openssl x509 -inform DER -in {0}\n"
-                          "Msg: {1}".format(user[2], err))
+    parser.add_argument("--no-ldap",
+                        help="disable fetching S/MIME certificates from LDAP",
+                        action="store_true")
 
-    if issues:
-        for issue in issues:
-            print(issue)
+    parser.add_argument("--send",
+                        help="enable sending message",
+                        action="store_true")
 
-        print("")
-        raise Exception("At least one user has a problem, aborting!")
+    parser.add_argument("--certificate",
+                        help="certificate file (needed if LDAP is disabled)",
+                        action="store")
 
-    print("Processing Users...\n")
-    for user in users:
-        code, uri = create_and_send_qrcode(user=user[0],
-                                           user_email=user[1],
-                                           user_cert=user[2])
-        print("* {0} ({1}): {2}".format(user[0], user[1], code))
+    parser.add_argument("mail",
+                        help="eMail address",
+                        action="store")
 
-    print("\nDone!")
+
+    # parse args
+    args = parser.parse_args()
+
+    mail = args.mail
+
+    print("Processing eMail address: {0}\n".format(mail))
+
+    if args.no_ldap:
+
+        if not args.certificate:
+            raise NotImplementedError("If LDAP is disabled then a "
+                                      "certificate file is required!")
+        with open(args.certificate, 'r') as f:
+            cert = f.read()
+
+        user_dct = {
+            "cn": mail,
+            "userCertificate": cert
+        }
+
+
+    else:
+        if args.certificate:
+            raise NotImplementedError("A certificate can not be provided if "
+                                      "LDAP is enabled!")
+        query = '(mail={0})'.format(mail)
+        ldap_result = ldap_search(LDAP_URI, SEARCH_BASE, query)
+
+        if len(ldap_result) == 0:
+            print("No result")
+            sys.exit(0)
+        elif len(ldap_result) == 1:
+            user_dct = ldap_result[0]
+        else:
+            print("Warning: More than one result.. using first!")
+            user_dct = ldap_result[1]
+
+    try:
+        x509 = X509.load_cert_string(user_dct["userCertificate"])
+    except IOError as err:
+        raise Exception("Error: Certificate not found: {0}\n"
+                        "Msg: {1}".format(user_dct["cn"], err))
+    except X509Error as err:
+        raise Exception("Error: Certificate problem: {0}\n"
+                        "Check format (should be PEM)\n"
+                        "openssl x509 -inform DER -in {0}\n"
+                        "Msg: {1}".format(user_dct["cn"], err))
+
+
+    code, uri = create_and_send_qrcode(user=user_dct["cn"],
+                                       user_email=mail,
+                                       user_cert=user_dct["userCertificate"],
+                                       send=args.send)
+    print("* {0} ({1}): {2}".format(user_dct["cn"], mail, code))
+
+    print("SQL Statement (if user id is cn)")
+    print('update user_preferences set preferences_value = "{0}" where '
+          'preferences_key = "UserGoogleAuthenticatorSecretKey" and '
+          'user_id = (select id from users where '
+          'login = "{1}");'.format(code, user_dct["cn"]))
 
 if __name__ == '__main__':
     main()
