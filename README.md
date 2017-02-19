@@ -56,3 +56,7 @@ BAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0IFdpZGdpdHMgUHR5IEx0
 ZDAeFw0xNzAyMTkxMDEzNTZaFw0xODAyMTkxMDEzNTZaMIGFMQswCQYDVQQGEwJB
 [...]
 ```
+
+### Screenshot
+
+![Thunderbird](/docs/images/thunderbird_screenshot.png)
