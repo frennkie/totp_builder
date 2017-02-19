@@ -11,14 +11,24 @@ via S/MIME encrypted e-mail.
 * python-m2crypto
 * pyotp
 * qrcode
+
 * shred (securely delete files)
+or
+* srm
 
 #### Install on Ubuntu
 
 ```
 sudo apt-get update
-sudo apt-get install -y python2.7 python-pip python-m2crypto python-qrcode shred
-pip install pyotp
+sudo apt-get install -y python2.7 python-pip python-m2crypto python-qrcode python-ldap shred
+sudo -H pip install pyotp
+```
+
+#### Install on CentOS 7
+
+```
+sudo yum install -y python2 python-pip m2crypto python-qrcode srm
+sudo -H pip install pyotp
 ```
 
 ### Usage / Config

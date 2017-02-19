@@ -259,7 +259,16 @@ def create_and_send_qrcode(user,
                         send=send)
 
     # securely delete .png file from disk
-    os.system("shred -uf {0}".format(QRCODE_FILE))
+    # TODO
+    try:
+        os.system("shred -uf {0}".format(QRCODE_FILE))
+    except Exception as err:
+        print("Error: {0}".format(err)
+
+    try:
+        os.system("srm -f {0}".format(QRCODE_FILE))
+    except Exception as err:
+        print("Error: {0}".format(err)
 
     return shared_secret, qrcode_text
 
