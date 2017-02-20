@@ -47,21 +47,25 @@ from email import Encoders
 import qrcode
 import pyotp
 
+try:
+    import config
+except ImportError:
+    raise Exception("No file config.py found!")
 
 # Versioning
-__version_info__ = ('0', '1', '0')
+__version_info__ = ('0', '3', '0')
 __version__ = '.'.join(__version_info__)
 
 
-LDAP_URI = 'ldap://ldap.example.com'
-SEARCH_BASE = 'o=example,c=com'
+LDAP_URI = config.LDAP_URI
+SEARCH_BASE = config.SEARCH_BASE
 
-QRCODE_FILE="qrcode.png"
+QRCODE_FILE=config.QRCODE_FILE
 
-OTP_SYSTEM="OTP_AUTH"
+OTP_SYSTEM=config.OTP_SYSTEM
 
-SMTP_SERVER="127.0.0.1"
-SMTP_FROM="otp-admin@example.com"
+SMTP_SERVER=config.SMTP_SERVER
+SMTP_FROM=config.SMTP_FROM
 
 
 def insert_newlines(string, every=64):
