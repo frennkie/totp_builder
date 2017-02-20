@@ -60,6 +60,8 @@ __version__ = '.'.join(__version_info__)
 LDAP_URI = config.LDAP_URI
 SEARCH_BASE = config.SEARCH_BASE
 
+LDAP_OTRS_LOGIN_FIELD_NAME = config.LDAP_OTRS_LOGIN_FIELD_NAME
+
 QRCODE_FILE=config.QRCODE_FILE
 
 OTP_SYSTEM=config.OTP_SYSTEM
@@ -374,7 +376,7 @@ def main():
     print('update user_preferences set preferences_value = "{0}" where '
           'preferences_key = "UserGoogleAuthenticatorSecretKey" and '
           'user_id = (select id from users where '
-          'login = "{1}");'.format(code, user_dct["cn"]))
+          'login = "{1}");'.format(code, user_dct[LDAP_OTRS_LOGIN_FIELD_NAME]))
 
 if __name__ == '__main__':
     main()
