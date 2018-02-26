@@ -28,7 +28,6 @@
 import os
 import os.path
 import sys
-import ldap
 import base64
 import logging
 import smtplib
@@ -36,16 +35,27 @@ import datetime
 import argparse
 import binascii
 
-from M2Crypto import BIO, Rand, SMIME, X509
-from M2Crypto.X509 import X509Error
-from email.MIMEMultipart import MIMEMultipart
-from email.MIMEBase import MIMEBase
-from email.MIMEText import MIMEText
-from email.Utils import COMMASPACE, formatdate
-from email import Encoders
+try:
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.base import MIMEBase
+    from email.mime.text import MIMEText
+    from email.utils import COMMASPACE, formatdate
+    from email import encoders
+except ImportError:  # backwards compatible with Py2.7
+    from email.MIMEMultipart import MIMEMultipart
+    from email.MIMEBase import MIMEBase
+    from email.MIMEText import MIMEText
+    from email.Utils import COMMASPACE, formatdate
+    from email import Encoders as encoders
 
 import qrcode
 import pyotp
+
+from ldap3 import Server, Connection, ALL
+from ldap3.core.exceptions import LDAPCursorError
+
+from M2Crypto import BIO, Rand, SMIME, X509
+from M2Crypto.X509 import X509Error
 
 try:
     import config
@@ -53,7 +63,7 @@ except ImportError:
     raise Exception("No file config.py found!")
 
 # Versioning
-__version_info__ = ('0', '3', '0')
+__version_info__ = ('0', '5', '0')
 __version__ = '.'.join(__version_info__)
 
 
@@ -83,77 +93,49 @@ def ldap_search(ldap_uri, base, query):
     '''
     results = []
 
-    try:
-        l = ldap.initialize(ldap_uri)
-        l.protocol_version = ldap.VERSION3
+    server = Server(ldap_uri, get_info=ALL)
+    # conn = Connection(server, 'uid=admin,cn=users,cn=accounts,dc=demo1,dc=freeipa,dc=org', 'Secret123', auto_bind=True)
+    conn = Connection(server, auto_bind=True)
 
-        search_scope = ldap.SCOPE_SUBTREE
-        retrieve_attributes = None
+    conn.search(base, query, attributes=['cn', 'mail', 'uid', 'userCertificate'])
+    result_set = conn.entries
 
-        ldap_result_id = l.search(
-            base,
-            search_scope,
-            query,
-            retrieve_attributes
-        )
-        result_set = []
-        while 1:
-            result_type, result_data = l.result(ldap_result_id, 0)
-            if (result_data == []):
-                break
+    print("result_set: {}".format(conn.entries))
+
+    if not conn.entries:
+        print('No results found.')
+        return
+
+    for entry in conn.entries:
+        dn = entry
+        mail = entry['mail']
+        uid = entry['uid']
+        cn = entry['cn']
+
+        # check both userCertificate and userCertificate;binary
+        userCertificate = None
+        try:
+            if entry['userCertificate']:
+                userCertificate = entry['userCertificate']
             else:
-                if result_type == ldap.RES_SEARCH_ENTRY:
-                    result_set.append(result_data)
+                userCertificate = entry['userCertificate;binary']
+        except LDAPCursorError:
+            print("Neither userCertificate nor userCertificate;binary ..")
 
-        if len(result_set) == 0:
-            print('No results found.')
+        if not userCertificate:
+            print("Warning: No certificate found!")
             return
 
-        count = 0
-        for i in range(len(result_set)):
-            for entry in result_set[i]:
-                try:
-                    dn = entry[1]
-                    mail = entry[1]['mail'][0]
-                    uid = entry[1]['uid'][0]
-                    cn = entry[1]['cn'][0]
+        userCertificate_raw = binascii.b2a_base64(userCertificate)
+        userCertificate = "-----BEGIN CERTIFICATE-----\n"
+        userCertificate += insert_newlines(userCertificate_raw).rstrip("\n")
+        userCertificate += "\n-----END CERTIFICATE-----\n"
 
-                    # check both userCertificate and userCertificate;binary
-                    userCertificateBinary = False
-                    if entry[1].get('userCertificate', None):
-                        userCertificate = entry[1]['userCertificate'][0]
-                    elif entry[1].get('userCertificate;binary', None):
-                        userCertificate = entry[1]['userCertificate;binary'][0]
-                        userCertificateBinary = True
-                    else:
-                        print("Warning: No certificate found!")
-
-                    count += 1
-
-                    if userCertificateBinary:
-                        pass  # TODO
-                    if not userCertificateBinary:
-                        pass  # TODO
-
-                    userCertificate_raw = binascii.b2a_base64(userCertificate)
-                    userCertificate = "-----BEGIN CERTIFICATE-----\n"
-                    userCertificate += insert_newlines(userCertificate_raw).rstrip("\n")
-                    userCertificate += "\n-----END CERTIFICATE-----\n"
-
-                    results.append({"dn": dn,
-                                    "mail": mail,
-                                    "userCertificate": userCertificate,
-                                    "uid": uid,
-                                    "cn": cn})
-                except Exception as err:
-                    print("Error: {0}".format(err))
-                    raise Exception("Error: {0}".format(err))
-
-    except ldap.LDAPError as e:
-        print('LDAPError: %s.' % e)
-
-    finally:
-        l.unbind_s()
+        results.append({"dn": dn,
+                        "mail": mail,
+                        "userCertificate": userCertificate,
+                        "uid": uid,
+                        "cn": cn})
 
     return results
 
@@ -183,7 +165,7 @@ def send_mail_ssl(server, sender, to, to_cert, subject, text, files=[], attachme
     for file in files:
         part = MIMEBase('application', "octet-stream")
         part.set_payload(open(file, "rb").read() )
-        Encoders.encode_base64(part)
+        encoders.encode_base64(part)
         part.add_header('Content-Disposition', 'attachment; filename="%s"'
                        % os.path.basename(file))
         msg.attach(part)
@@ -192,7 +174,7 @@ def send_mail_ssl(server, sender, to, to_cert, subject, text, files=[], attachme
     for name in attachments:
         part = MIMEBase('application', "octet-stream")
         part.set_payload(attachments[name])
-        Encoders.encode_base64(part)
+        encoders.encode_base64(part)
         part.add_header('Content-Disposition', 'attachment; filename="%s"' % name)
         msg.attach(part)
 
